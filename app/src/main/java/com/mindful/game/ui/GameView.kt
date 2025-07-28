@@ -8,8 +8,8 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.mindful.game.core.GameEngine
 import com.mindful.game.input.TouchProcessor
-import com.mindful.game.physics.NoiseBasedEngine
-import com.mindful.game.rendering.SimpleRenderer
+import com.mindful.game.physics.FluidDynamicsEngine
+import com.mindful.game.rendering.FluidRenderer
 
 /**
  * Custom SurfaceView that displays the game and handles input.
@@ -35,8 +35,8 @@ class GameView @JvmOverloads constructor(
         if (isGameInitialized) return
         
         // Create modular components - easy to swap implementations
-        val physicsEngine = NoiseBasedEngine()
-        val renderer = SimpleRenderer()
+        val physicsEngine = FluidDynamicsEngine()
+        val renderer = FluidRenderer()
         val touchProcessor = TouchProcessor()
         
         // Create game engine with dependency injection
