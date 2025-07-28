@@ -54,8 +54,11 @@ class FluidRenderer : IBoundaryRenderer {
     private var lastWidth = 0
     private var lastHeight = 0
     
-    // Performance optimization
-    private val sampleRate = intArrayOf(4, 2, 1) // Sample every N pixels based on quality
+    // Performance optimization - Enhanced sampling for smoke-like smoothness
+    private val sampleRate = intArrayOf(2, 1, 1) // Always high quality, sub-pixel on ultra
+    
+    // Advanced smoke effects
+    private val smokeEffects = SmokeEffects()
     
     override fun render(canvas: Canvas, physicsEngine: IPhysicsEngine, width: Int, height: Int) {
         // Initialize or resize bitmap if needed
@@ -94,35 +97,26 @@ class FluidRenderer : IBoundaryRenderer {
         val bitmap = this.bitmap ?: return
         val pixelArray = this.pixelArray ?: return
         
-        val sample = sampleRate[quality]
-        
-        // Sample the color field and create pixel array
-        for (y in 0 until height step sample) {
-            for (x in 0 until width step sample) {
-                val normalizedX = x.toFloat() / width
-                val normalizedY = y.toFloat() / height
-                
-                // Get color intensity from physics engine
-                val whiteIntensity = physicsEngine.getLeftRegionIntensity(normalizedX, normalizedY)
-                val blackIntensity = physicsEngine.getRightRegionIntensity(normalizedX, normalizedY)
-                
-                // Calculate mixed color
-                val mixedColor = calculateMixedColor(whiteIntensity, blackIntensity)
-                
-                // Fill the sample area with this color
-                for (dy in 0 until sample) {
-                    for (dx in 0 until sample) {
-                        val pixelX = x + dx
-                        val pixelY = y + dy
-                        if (pixelX < width && pixelY < height) {
-                            pixelArray[pixelY * width + pixelX] = mixedColor
-                        }
-                    }
+        // Use sub-pixel sampling for ultra-smooth gradients
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val color = if (quality >= 2) {
+                    // Multi-sampling for highest quality
+                    sampleColorWithMultiSampling(x, y, width, height, physicsEngine)
+                } else {
+                    // Bilinear interpolation for medium quality
+                    sampleColorWithInterpolation(x, y, width, height, physicsEngine)
                 }
+                
+                pixelArray[y * width + x] = color
             }
         }
         
-        // Apply the pixel array to bitmap and draw it
+        // Apply edge feathering for highest quality
+        if (quality >= 2) {
+            applyEdgeFeathering(pixelArray, width, height)
+        }
+        
         bitmap.setPixels(pixelArray, 0, width, 0, 0, width, height)
         canvas.drawBitmap(bitmap, 0f, 0f, null)
     }
@@ -150,6 +144,77 @@ class FluidRenderer : IBoundaryRenderer {
         }
         
         return Color.rgb(grayValue, grayValue, grayValue)
+    }
+    
+    private fun sampleColorWithInterpolation(
+        pixelX: Int, pixelY: Int, width: Int, height: Int, physicsEngine: IPhysicsEngine
+    ): Int {
+        val normalizedX = pixelX.toFloat() / width
+        val normalizedY = pixelY.toFloat() / height
+        
+        // Sample at exact pixel center
+        val whiteIntensity = physicsEngine.getLeftRegionIntensity(normalizedX, normalizedY)
+        val blackIntensity = physicsEngine.getRightRegionIntensity(normalizedX, normalizedY)
+        
+        return calculateEnhancedMixedColor(whiteIntensity, blackIntensity, normalizedX, normalizedY)
+    }
+    
+    private fun sampleColorWithMultiSampling(
+        pixelX: Int, pixelY: Int, width: Int, height: Int, physicsEngine: IPhysicsEngine
+    ): Int {
+        val sampleOffsets = arrayOf(
+            -0.25f to -0.25f,
+            0.25f to -0.25f,
+            -0.25f to 0.25f,
+            0.25f to 0.25f
+        )
+        
+        var totalRed = 0f
+        var totalGreen = 0f
+        var totalBlue = 0f
+        
+        for ((offsetX, offsetY) in sampleOffsets) {
+            val sampleX = (pixelX + offsetX) / width
+            val sampleY = (pixelY + offsetY) / height
+            
+            val whiteIntensity = physicsEngine.getLeftRegionIntensity(sampleX, sampleY)
+            val blackIntensity = physicsEngine.getRightRegionIntensity(sampleX, sampleY)
+            
+            val color = calculateEnhancedMixedColor(whiteIntensity, blackIntensity, sampleX, sampleY)
+            
+            totalRed += Color.red(color)
+            totalGreen += Color.green(color)
+            totalBlue += Color.blue(color)
+        }
+        
+        val avgRed = (totalRed / 4f).toInt().coerceIn(0, 255)
+        val avgGreen = (totalGreen / 4f).toInt().coerceIn(0, 255)
+        val avgBlue = (totalBlue / 4f).toInt().coerceIn(0, 255)
+        
+        return Color.rgb(avgRed, avgGreen, avgBlue)
+    }
+    
+    private fun calculateEnhancedMixedColor(
+        whiteIntensity: Float, blackIntensity: Float, x: Float, y: Float
+    ): Int {
+        val totalIntensity = whiteIntensity + blackIntensity
+        if (totalIntensity <= 0f) return Color.GRAY
+        
+        // Calculate turbulence using noise generation
+        val turbulence = smokeEffects.generateSmokeNoise(x, y, System.currentTimeMillis() / 1000f)
+        
+        // Use SmokeEffects for advanced color calculation
+        val smokeColor = smokeEffects.calculateSmokeColor(
+            whiteIntensity, blackIntensity, turbulence, x to y
+        )
+        
+        // Apply volumetric lighting for depth
+        val depth = smokeEffects.calculateDensity(whiteIntensity, blackIntensity)
+        val litColor = smokeEffects.applyVolumetricLighting(smokeColor, depth)
+        
+        // Apply temperature gradient for realism
+        val temperature = smokeEffects.calculateMixingActivity(whiteIntensity, blackIntensity)
+        return smokeEffects.applyTemperatureGradient(litColor, temperature)
     }
     
     private fun renderBoundaryLine(
@@ -268,6 +333,61 @@ class FluidRenderer : IBoundaryRenderer {
     override fun update(deltaTime: Float) {
         // Could add particle effects or other animations here
         // For now, the fluid simulation provides all the animation
+    }
+    
+    private fun applyEdgeFeathering(pixelArray: IntArray, width: Int, height: Int) {
+        val temp = pixelArray.copyOf()
+        val featherRadius = 2
+        
+        for (y in featherRadius until height - featherRadius) {
+            for (x in featherRadius until width - featherRadius) {
+                val index = x + y * width
+                
+                // Calculate local gradient
+                val gradient = calculateGradientMagnitude(temp, x, y, width)
+                
+                if (gradient > 50f) { // Threshold for edge detection
+                    // Apply Gaussian blur to soften edges
+                    var weightedSum = 0f
+                    var totalWeight = 0f
+                    
+                    for (dy in -featherRadius..featherRadius) {
+                        for (dx in -featherRadius..featherRadius) {
+                            val distance = kotlin.math.sqrt((dx * dx + dy * dy).toFloat())
+                            if (distance <= featherRadius) {
+                                val weight = kotlin.math.exp(-distance * distance / (2f * featherRadius * featherRadius / 3f))
+                                val sampleIndex = (x + dx) + (y + dy) * width
+                                
+                                if (sampleIndex in temp.indices) {
+                                    val grayValue = (Color.red(temp[sampleIndex]) + 
+                                                   Color.green(temp[sampleIndex]) + 
+                                                   Color.blue(temp[sampleIndex])) / 3f
+                                    weightedSum += grayValue * weight
+                                    totalWeight += weight
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (totalWeight > 0f) {
+                        val smoothedGray = (weightedSum / totalWeight).toInt().coerceIn(0, 255)
+                        pixelArray[index] = Color.rgb(smoothedGray, smoothedGray, smoothedGray)
+                    }
+                }
+            }
+        }
+    }
+    
+    private fun calculateGradientMagnitude(pixels: IntArray, x: Int, y: Int, width: Int): Float {
+        val left = if (x > 0) Color.red(pixels[(x-1) + y * width]) else Color.red(pixels[x + y * width])
+        val right = if (x < width-1) Color.red(pixels[(x+1) + y * width]) else Color.red(pixels[x + y * width])
+        val top = if (y > 0) Color.red(pixels[x + (y-1) * width]) else Color.red(pixels[x + y * width])
+        val bottom = if (y < pixels.size/width-1) Color.red(pixels[x + (y+1) * width]) else Color.red(pixels[x + y * width])
+        
+        val gradX = (right - left) / 2f
+        val gradY = (bottom - top) / 2f
+        
+        return kotlin.math.sqrt(gradX * gradX + gradY * gradY)
     }
     
     fun cleanup() {

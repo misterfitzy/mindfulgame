@@ -10,9 +10,9 @@ import kotlin.random.Random
  */
 class FluidDynamicsEngine : IPhysicsEngine {
     
-    // Grid configuration
-    private var gridWidth = 64
-    private var gridHeight = 48
+    // Grid configuration - Enhanced resolution for smoke-like detail
+    private var gridWidth = 128  // Doubled from 64 for 4x detail
+    private var gridHeight = 96   // Doubled from 48 for 4x detail
     private var cellSize = 1f
     
     // Fluid simulation arrays
@@ -32,18 +32,35 @@ class FluidDynamicsEngine : IPhysicsEngine {
     private val boundaryResolution = 100
     private val boundaryPoints = FloatArray(boundaryResolution * 2)
     
-    // Simulation parameters
+    // Simulation parameters - Enhanced for smoke-like behavior
     private val viscosity = 0.001f
     private val diffusion = 0.0001f
     private val vorticity = 0.5f
     private val timeStep = 0.016f
     private val densityDecay = 0.999f
     
+    // Enhanced turbulence parameters
+    private val turbulenceOctaves = 5  // Increased from implicit 3
+    private val turbulenceFrequencies = floatArrayOf(1f, 2f, 4f, 8f, 16f)
+    private val turbulenceAmplitudes = floatArrayOf(1f, 0.6f, 0.36f, 0.216f, 0.1296f)
+    
     // Mixing parameters
     private var mixingIntensity = 0.0f
     private val maxMixingIntensity = 1.0f
     private val mixingGrowthRate = 0.1f
     private var globalTime = 0f
+    
+    // Adaptive resolution system
+    enum class ResolutionMode(val width: Int, val height: Int) {
+        PERFORMANCE(64, 48),
+        STANDARD(96, 72), 
+        HIGH(128, 96),
+        ULTRA(192, 144)
+    }
+    
+    private var currentResolution = ResolutionMode.HIGH
+    private var targetFPS = 60f
+    private var currentFPS = 60f
     
     // Touch interaction
     private val activeTouches = mutableListOf<TouchForce>()
@@ -125,26 +142,30 @@ class FluidDynamicsEngine : IPhysicsEngine {
                 val normalizedDistance = distanceFromCenter / injectionRadius.coerceAtLeast(1)
                 
                 if (normalizedDistance <= 1f) {
-                    // Generate multi-scale noise
                     val noiseX = x.toFloat() / gridWidth
                     val noiseY = y.toFloat() / gridHeight
                     
-                    val noise1 = sin((noiseX * 4 + noiseOffset) * PI * 2) * cos((noiseY * 3 + noiseOffset * 0.7) * PI * 2)
-                    val noise2 = sin((noiseX * 8 + noiseOffset * 1.3) * PI * 2) * cos((noiseY * 6 + noiseOffset * 0.9) * PI * 2)
-                    val noise3 = sin((noiseX * 16 + noiseOffset * 1.7) * PI * 2) * cos((noiseY * 12 + noiseOffset * 1.1) * PI * 2)
+                    // Multi-octave turbulence for smoke-like detail
+                    var combinedNoise = 0f
+                    for (octave in 0 until turbulenceOctaves) {
+                        val freq = turbulenceFrequencies[octave]
+                        val amp = turbulenceAmplitudes[octave]
+                        
+                        val noise = sin((noiseX * freq + noiseOffset) * PI * 2) * 
+                                   cos((noiseY * freq + noiseOffset * 0.7) * PI * 2)
+                        combinedNoise += noise.toFloat() * amp
+                    }
                     
-                    val combinedNoise = (noise1 * 0.5 + noise2 * 0.3 + noise3 * 0.2).toFloat()
                     val falloff = (1f - normalizedDistance) * mixingIntensity
+                    val turbulentForce = combinedNoise * falloff * 25f
                     
-                    // Add turbulent velocity
-                    val turbulentForce = combinedNoise * falloff * 20f
+                    // Add curl-like motion for realistic fluid flow
                     velocityX[index] += turbulentForce * cos(globalTime + noiseY * PI).toFloat()
                     velocityY[index] += turbulentForce * sin(globalTime + noiseX * PI).toFloat()
                     
-                    // Create persistent vortices
-                    if (random.nextFloat() < 0.01f * deltaTime * mixingIntensity) {
-                        val vortexStrength = (random.nextFloat() - 0.5f) * 30f * mixingIntensity
-                        addVortex(x, y, vortexStrength)
+                    // Micro-vortices for fine detail
+                    if (random.nextFloat() < 0.015f * deltaTime * mixingIntensity) {
+                        addMicroVortex(x, y, (random.nextFloat() - 0.5f) * 15f)
                     }
                 }
             }
@@ -165,6 +186,27 @@ class FluidDynamicsEngine : IPhysicsEngine {
                     val falloff = (1f - distance / radius) * strength
                     
                     // Create rotational velocity field
+                    velocityX[index] += -dy.toFloat() / distance * falloff
+                    velocityY[index] += dx.toFloat() / distance * falloff
+                }
+            }
+        }
+    }
+    
+    private fun addMicroVortex(centerX: Int, centerY: Int, strength: Float) {
+        val radius = 3 // Smaller than regular vortices for fine detail
+        for (dy in -radius..radius) {
+            for (dx in -radius..radius) {
+                val x = centerX + dx
+                val y = centerY + dy
+                if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) continue
+                
+                val distance = sqrt((dx * dx + dy * dy).toFloat())
+                if (distance < radius && distance > 0) {
+                    val index = x + y * gridWidth
+                    val falloff = (1f - distance / radius) * strength
+                    
+                    // Create rotational velocity field for micro-scale detail
                     velocityX[index] += -dy.toFloat() / distance * falloff
                     velocityY[index] += dx.toFloat() / distance * falloff
                 }
@@ -540,4 +582,43 @@ class FluidDynamicsEngine : IPhysicsEngine {
         val index = gridX + gridY * gridWidth
         return 1f - colorField[index]
     }
+    
+    fun setResolutionMode(mode: ResolutionMode) {
+        if (mode != currentResolution) {
+            currentResolution = mode
+            gridWidth = mode.width
+            gridHeight = mode.height
+            initializeArrays()
+            reset()
+        }
+    }
+    
+    fun updatePerformanceAdaptation(fps: Float) {
+        currentFPS = currentFPS * 0.9f + fps * 0.1f // Smooth FPS
+        
+        // Auto-adjust resolution based on performance
+        when {
+            currentFPS < 45f && currentResolution != ResolutionMode.PERFORMANCE -> {
+                val newMode = when (currentResolution) {
+                    ResolutionMode.ULTRA -> ResolutionMode.HIGH
+                    ResolutionMode.HIGH -> ResolutionMode.STANDARD
+                    ResolutionMode.STANDARD -> ResolutionMode.PERFORMANCE
+                    else -> currentResolution
+                }
+                setResolutionMode(newMode)
+            }
+            currentFPS > 55f && currentResolution != ResolutionMode.ULTRA -> {
+                val newMode = when (currentResolution) {
+                    ResolutionMode.PERFORMANCE -> ResolutionMode.STANDARD
+                    ResolutionMode.STANDARD -> ResolutionMode.HIGH
+                    ResolutionMode.HIGH -> ResolutionMode.ULTRA
+                    else -> currentResolution
+                }
+                setResolutionMode(newMode)
+            }
+        }
+    }
+    
+    fun getCurrentResolution(): ResolutionMode = currentResolution
+    fun getCurrentFPS(): Float = currentFPS
 }
