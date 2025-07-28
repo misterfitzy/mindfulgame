@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.mindful.game.app-mergeDebugResources-31:/values-ldrtl-v17/values-ldrtl-v17.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\pfitzgerald\\.gradle\\caches\\9.0-milestone-1\\transforms\\5430b5a73d40f43d255a089436982e89\\transformed\\material-1.11.0\\res\\values-ldrtl-v17\\values-ldrtl-v17.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,191",
+                        "endColumns": "135,140",
+                        "endOffsets": "186,327"
+                    }
+                }
+            ]
+        }
+    ]
+}
